@@ -1,0 +1,19 @@
+{
+  "name": "policyguard-croo",
+  "version": "0.1.0",
+  "description": "A callable guardrail agent for the CROO Agent Hackathon that checks a proposed on-chain action against policy and returns allow or deny with a reason.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
