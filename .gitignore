@@ -4,3 +4,8 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
+
+# Log and run-output artifacts (never commit these; they can capture runtime detail)
+*.log
+.output
+*.output

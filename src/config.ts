@@ -10,6 +10,7 @@
 // loaders are called from the start functions when a flow actually runs.
 
 import { config as loadDotenv } from "dotenv";
+import type { Logger } from "@croo-network/sdk";
 
 // Load a local .env into process.env if one exists. This is a no-op when no
 // .env file is present. It does not open any network connection and does not
@@ -35,6 +36,34 @@ function requireEnv(name: string): string {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+/**
+ * Scrub secret material from a value before it is logged. Removes SDK keys
+ * (croo_sk_...) and any `key=...` query parameter (the SDK embeds the SDK key in
+ * the WebSocket URL as ?key=...). Returns a string safe to print.
+ */
+function redactSecrets(value: unknown): string {
+  const s = typeof value === "string" ? value : JSON.stringify(value);
+  return s
+    .replace(/croo_sk_[A-Za-z0-9]+/g, "croo_sk_***")
+    .replace(/key=[^&\s"']+/g, "key=***");
+}
+
+/**
+ * Build a Logger for the CROO SDK that redacts secrets from every message and
+ * argument before printing. The SDK's default logger prints the WebSocket URL,
+ * which embeds the SDK key (wss://.../ws?key=croo_sk_...); passing this logger
+ * in the client Config prevents that key from ever reaching stdout. Debug-level
+ * logs (raw request URLs) are dropped entirely.
+ */
+export function createRedactingLogger(): Logger {
+  return {
+    info: (m, ...a) => console.log(`[croo] ${redactSecrets(m)}`, ...a.map(redactSecrets)),
+    warn: (m, ...a) => console.warn(`[croo] ${redactSecrets(m)}`, ...a.map(redactSecrets)),
+    error: (m, ...a) => console.error(`[croo] ${redactSecrets(m)}`, ...a.map(redactSecrets)),
+    debug: () => {},
+  };
 }
 
 /**
