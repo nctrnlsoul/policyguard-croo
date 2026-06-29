@@ -35,7 +35,7 @@ import {
   type EventStream,
 } from "@croo-network/sdk";
 import { evaluate, type PolicyInput, type ActionType, type PolicyResult } from "./policy.js";
-import { loadProviderConfig } from "./config.js";
+import { loadProviderConfig, createRedactingLogger } from "./config.js";
 
 // The action types the policy engine understands. Used to validate buyer input.
 const VALID_ACTIONS: readonly ActionType[] = ["transfer", "swap", "contract_call"];
@@ -48,6 +48,7 @@ function buildClient(): AgentClient {
   const config: Config = {
     baseURL: env.apiUrl,
     wsURL: env.wsUrl,
+    logger: createRedactingLogger(),
   };
   return new AgentClient(config, env.sdkKey);
 }

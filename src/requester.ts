@@ -26,7 +26,7 @@ import {
   type Config,
   type Event,
 } from "@croo-network/sdk";
-import { loadRequesterConfig } from "./config.js";
+import { loadRequesterConfig, createRedactingLogger } from "./config.js";
 
 // Declared locally because the requester only needs to describe a sample action
 // to send over the wire. It does not run the engine. This string union mirrors
@@ -47,35 +47,73 @@ export interface SampleRequest {
 }
 
 /**
- * Start the requester: negotiate an order for the sample action, pay when the
- * order is created, and print the decision when the order completes. This
- * performs the live work and is intentionally not run on import.
+ * Format a USDC base-unit amount (6 decimals) for display. Best-effort only:
+ * returns the raw string unchanged if it is not a clean non-negative integer.
+ * Used purely to make the quoted service fee readable; carries no secret.
+ */
+function formatUsdc(base: string): string {
+  if (!/^\d+$/.test(base)) {
+    return base;
+  }
+  const padded = base.padStart(7, "0");
+  const whole = padded.slice(0, -6);
+  const frac = padded.slice(-6).replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : whole;
+}
+
+/**
+ * Start the requester: negotiate an order for the sample action, pay the service
+ * fee when the order is created, and print the delivered decision when the order
+ * completes. Each step is printed with a clear label. No secret value is ever
+ * printed. This performs the live work and is intentionally not run on import.
+ *
+ * It drives exactly one order: a single negotiateOrder, and payOrder is guarded
+ * so the fee is paid at most once. When the order completes, the stream is
+ * closed so the process can exit.
  */
 export async function start(req: SampleRequest): Promise<void> {
   const env = loadRequesterConfig();
   const config: Config = {
     baseURL: env.apiUrl,
     wsURL: env.wsUrl,
+    logger: createRedactingLogger(),
   };
   const client = new AgentClient(config, env.requesterSdkKey);
 
   const stream = await client.connectWebSocket();
 
-  // Pay as soon as the order is created on-chain.
+  // Pay the service fee once the order is created on-chain. Guarded so a repeat
+  // OrderCreated event can never trigger a second payment.
+  let hasPaid = false;
   stream.on(EventType.OrderCreated, async (e: Event) => {
     try {
       if (!e.order_id) {
         return;
       }
-      const result = await client.payOrder(e.order_id);
-      console.log(`[requester] payment submitted, tx ${result.txHash}`);
+
+      // Read the created order to surface the quoted service fee (Order.price,
+      // in paymentToken base units — USDC has 6 decimals).
+      const order = await client.getOrder(e.order_id);
+      console.log(`[requester] ORDER CREATED: ${order.orderId}`);
+      console.log(
+        `[requester]   quoted price (service fee): ${order.price} base units (~${formatUsdc(order.price)} USDC)`,
+      );
+
+      if (hasPaid) {
+        return;
+      }
+      hasPaid = true;
+
+      console.log(`[requester] PAYING service fee...`);
+      const result = await client.payOrder(order.orderId);
+      console.log(`[requester] PAID: tx ${result.txHash}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[requester] payOrder: ${message}`);
     }
   });
 
-  // Read and print the decision once the order completes.
+  // Read and print the delivered decision once the order completes.
   stream.on(EventType.OrderCompleted, async (e: Event) => {
     try {
       if (!e.order_id) {
@@ -83,11 +121,28 @@ export async function start(req: SampleRequest): Promise<void> {
       }
       const delivery = await client.getDelivery(e.order_id);
       const payload = delivery.deliverableSchema || delivery.deliverableText;
-      console.log(`[requester] PolicyGuard decision payload: ${payload}`);
+
+      console.log(`[requester] DELIVERY RECEIVED:`);
+      let parsed: { decision?: unknown; matchedRule?: unknown; reason?: unknown } | undefined;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        parsed = undefined;
+      }
+      if (parsed && typeof parsed === "object") {
+        console.log(`[requester]   decision:    ${parsed.decision}`);
+        console.log(`[requester]   matchedRule: ${parsed.matchedRule}`);
+        console.log(`[requester]   reason:      ${parsed.reason}`);
+      } else {
+        console.log(`[requester]   raw payload: ${payload}`);
+      }
+
+      console.log(`[requester] ORDER COMPLETED: ${e.order_id}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[requester] getDelivery: ${message}`);
     } finally {
+      // The single order is done; close the stream so the process can exit.
       stream.close();
     }
   });
@@ -104,5 +159,8 @@ export async function start(req: SampleRequest): Promise<void> {
     serviceId: req.serviceId,
     requirements,
   });
-  console.log(`[requester] negotiation started: ${negotiation.negotiationId}`);
+  console.log(`[requester] NEGOTIATION CREATED: ${negotiation.negotiationId}`);
+  console.log(
+    `[requester]   (the service fee is quoted on the order; printed at "ORDER CREATED")`,
+  );
 }
