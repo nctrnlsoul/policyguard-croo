@@ -1,0 +1,25 @@
+# Keep the build context (and therefore the image) small and secret-free.
+# Nothing here is copied into the image.
+
+node_modules
+dist
+build
+
+# Secrets and local env — supplied at runtime as Fly secrets, never baked in.
+.env
+.env.local
+
+# Logs and run-output artifacts.
+*.log
+.output
+*.output
+
+# Git and CI metadata.
+.git
+.gitignore
+.github
+
+# Local run scripts and docs not needed at runtime.
+run-provider.mjs
+run-requester.mjs
+*.md

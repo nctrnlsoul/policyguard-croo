@@ -27,6 +27,8 @@ import {
   type Event,
 } from "@croo-network/sdk";
 import { loadRequesterConfig, createRedactingLogger } from "./config.js";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 // Declared locally because the requester only needs to describe a sample action
 // to send over the wire. It does not run the engine. This string union mirrors
@@ -163,4 +165,84 @@ export async function start(req: SampleRequest): Promise<void> {
   console.log(
     `[requester]   (the service fee is quoted on the order; printed at "ORDER CREATED")`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Runner entry point.
+//
+// When this file is executed directly (for example `npx tsx src/requester.ts`),
+// drive exactly one real order against a running PolicyGuard provider, then exit
+// when it completes (start closes the WebSocket on OrderCompleted). Importing
+// the module instead does not reach this block, so importing stays side-effect
+// free.
+//
+// The target service id is supplied at run time (it is not a project env var):
+//   npx tsx src/requester.ts <serviceId>
+// or set POLICYGUARD_SERVICE_ID in the environment.
+
+/**
+ * True when this module is the process entry point rather than an import. Path
+ * resolution handles the difference between the file: URL and argv[1] on every
+ * platform.
+ */
+function isRunDirectly(): boolean {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  return resolve(fileURLToPath(import.meta.url)) === resolve(entry);
+}
+
+async function main(): Promise<void> {
+  const PLACEHOLDER = "PASTE_SERVICE_ID_HERE";
+  const serviceId = process.argv[2] || process.env.POLICYGUARD_SERVICE_ID || PLACEHOLDER;
+
+  // Refuse to negotiate with the unfilled placeholder. Nothing is sent and no
+  // fee is paid in this case.
+  if (!serviceId || serviceId === PLACEHOLDER) {
+    console.error("[requester] No real PolicyGuard service id was provided.");
+    console.error("[requester] Pass it as an argument:  npx tsx src/requester.ts <serviceId>");
+    console.error("[requester] or set POLICYGUARD_SERVICE_ID in the environment.");
+    console.error("[requester] Refusing to negotiate with the placeholder. Nothing sent; no fee paid.");
+    process.exit(2);
+  }
+
+  const req: SampleRequest = {
+    serviceId,
+    action: "contract_call",
+    asset: "USDC",
+    amount: 50,
+    recipient: "0x000000000000000000000000000000000000dEaD",
+  };
+
+  console.log("[requester] driving a single PolicyGuard order (pays the ~$0.10 service fee once).");
+  console.log(`[requester] target service: ${serviceId}`);
+  console.log(`[requester] sample action: contract_call 50 USDC -> ${req.recipient} (denied by default policy)`);
+
+  // Safety watchdog: if the order never completes, exit instead of hanging
+  // forever. Unref'd so it does not by itself keep the process alive once the
+  // requester closes its WebSocket after completion. Set generously: on-chain
+  // settlement on Base (pay -> deliver -> clear) can take a few minutes.
+  const watchdog = setTimeout(() => {
+    console.error("[requester] timed out after 300s waiting for the order to complete. Exiting.");
+    process.exit(1);
+  }, 300_000);
+  watchdog.unref();
+
+  // Clean exit on Ctrl+C.
+  process.on("SIGINT", () => {
+    console.log("[requester] SIGINT received, exiting");
+    process.exit(0);
+  });
+
+  await start(req);
+  console.log("[requester] negotiation sent; waiting for order to be created, paid, and delivered...");
+}
+
+if (isRunDirectly()) {
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[requester] requester failed: ${message}`);
+    process.exit(1);
+  });
 }

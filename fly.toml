@@ -1,0 +1,31 @@
+# Fly.io configuration for the PolicyGuard provider — a WORKER, not a web app.
+#
+# There is intentionally NO [http_service] and NO [[services]] block: this
+# process serves no HTTP and exposes no ports. It holds an outbound WebSocket to
+# CROO and reacts to events.
+#
+# Always-on guarantee: auto-stop is a per-SERVICE feature in Fly. Because this
+# app declares no services, there is nothing that can idle the machine down — it
+# runs its CMD (the resilient supervisor in dist/serve.js) continuously. A deploy
+# provisions a single machine; `fly scale count 1` (see SETUP.md) pins it at
+# exactly one always-running instance. If the process ever exits non-zero, Fly's
+# default restart policy brings it back.
+#
+# No secrets live in this file. The CROO_* values are set as Fly secrets
+# (`fly secrets set ...`) and injected as environment variables at runtime; the
+# app reads them by name via loadProviderConfig().
+
+app = "policyguard-croo"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+
+# Smallest instance: this is a lightweight event listener, not a compute job.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpus = 1

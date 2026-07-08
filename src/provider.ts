@@ -36,6 +36,8 @@ import {
 } from "@croo-network/sdk";
 import { evaluate, type PolicyInput, type ActionType, type PolicyResult } from "./policy.js";
 import { loadProviderConfig, createRedactingLogger } from "./config.js";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 // The action types the policy engine understands. Used to validate buyer input.
 const VALID_ACTIONS: readonly ActionType[] = ["transfer", "swap", "contract_call"];
@@ -179,4 +181,51 @@ export async function start(): Promise<EventStream> {
 
   console.log("[provider] connected and listening");
   return stream;
+}
+
+// ---------------------------------------------------------------------------
+// Runner entry point.
+//
+// When this file is executed directly (for example `npx tsx src/provider.ts`),
+// start the provider, keep the process alive listening on the open WebSocket,
+// and close the stream cleanly on Ctrl+C. Importing the module instead (a test,
+// or the built dist runner) does not reach this block, so importing the module
+// stays side-effect free.
+
+/**
+ * True when this module is the process entry point rather than an import. Path
+ * resolution handles the difference between the file: URL and argv[1] on every
+ * platform.
+ */
+function isRunDirectly(): boolean {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  return resolve(fileURLToPath(import.meta.url)) === resolve(entry);
+}
+
+async function main(): Promise<void> {
+  const stream = await start();
+
+  // Surface any stream-level error without crashing the listener.
+  const err = stream.err();
+  if (err) {
+    console.error(`[provider] stream reported error: ${err.message}`);
+  }
+
+  // The open WebSocket keeps the event loop alive, so the process stays online
+  // and listening until interrupted. Close it cleanly on Ctrl+C.
+  process.on("SIGINT", () => {
+    console.log("[provider] SIGINT received, closing WebSocket and exiting");
+    stream.close();
+    process.exit(0);
+  });
+}
+
+if (isRunDirectly()) {
+  main().catch((err) => {
+    logError("start", err);
+    process.exit(1);
+  });
 }
